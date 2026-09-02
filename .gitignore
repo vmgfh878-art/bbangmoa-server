@@ -35,3 +35,9 @@ out/
 
 ### VS Code ###
 .vscode/
+
+# 로컬 데이터 볼륨 (DB 파일)
+data/
+
+# 실제 비밀값
+.env

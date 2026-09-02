@@ -1,3 +1,58 @@
 spring:
   application:
-    name: server
+    name: bbangmoa-server
+
+  datasource:
+    # ${환경변수:기본값} — 컨테이너에서는 compose가 넣어준 값을,
+    # IDE에서 그냥 실행할 때는 뒤의 기본값을 쓴다.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/bbangmoa}
+    username: ${DB_USERNAME:bbangmoa}
+    password: ${DB_PASSWORD:localdev}
+    hikari:
+      # DB로 가는 연결을 미리 만들어두고 돌려쓴다. 요청마다 새로 만들면 DB가 죽는다.
+      maximum-pool-size: ${DB_POOL_MAX:10}
+      minimum-idle: 2
+
+  jpa:
+    hibernate:
+      # 엔티티와 실제 테이블이 다르면 부팅을 실패시킨다.
+      # update로 두면 엔티티가 테이블을 멋대로 바꿔서 스키마의 진실이 두 곳이 된다.
+      ddl-auto: validate
+    # 커넥션을 화면 렌더링까지 붙들지 않고 쿼리 직후 반납한다.
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    # 스키마 변경의 단일 진실. db/migration의 V1, V2... 를 순서대로 적용하고
+    # 어디까지 적용했는지 DB가 스스로 기억한다.
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 필요한 것만 연다. 기본으로 다 열면 내부 정보가 새어나간다.
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+
+server:
+  # 앞에 Nginx가 서면 클라이언트 IP·프로토콜이 프록시 헤더로 온다.
+  # 이걸 켜야 스프링이 원래 요청을 https로 인식한다.
+  forward-headers-strategy: framework
+
+logging:
+  level:
+    root: INFO
