@@ -47,11 +47,15 @@ services:
 
   # ── Spring Boot ─────────────────────────────────────────────
   api:
+    # image 와 build 를 같이 둔다.
+    #   로컬: docker compose up -d --build  → 여기서 굽고 이 이름을 붙인다
+    #   서버: docker compose pull           → GHCR 에서 이 이름을 받아온다
+    # TAG 가 없으면 latest. 배포 워크플로가 .env 에 TAG=sha-xxxxxxx 를 적어준다.
+    image: ghcr.io/vmgfh878-art/bbangmoa-server:${TAG:-latest}
     build: .
-    image: bbangmoa-server:local
     container_name: bbangmoa-api
     ports:
-      # 로컬에서도 루프백만. 나중에 서버에서는 Nginx가 앞에 서므로 이대로 둔다.
+      # 로컬에서도 루프백만. 서버에서는 Nginx가 앞에 서므로 이대로 둔다.
       - "127.0.0.1:8080:8080"
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}

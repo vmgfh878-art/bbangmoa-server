@@ -1,0 +1,128 @@
+# 빌드는 GitHub이, 실행은 우리 서버가.
+#
+# main 에 push 하면:
+#   1) GitHub Actions 러너에서 arm64 이미지를 굽고
+#   2) GHCR(이미지 창고)에 올리고
+#   3) SSH 로 서버에 들어가 pull 후 재기동한다.
+#
+# 서버에서 빌드하지 않는 이유 셋
+#   - 서버 CPU·메모리를 빌드가 잡아먹어 서비스가 느려진다 (RAM 1.8Gi 라 특히)
+#   - 빌드가 중간에 실패하면 서버에 반쯤 부서진 상태가 남는다
+#   - 테스트한 것과 배포된 것이 같다는 보장이 사라진다  ← 이게 제일 크다
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch: {}      # 액션 탭에서 손으로도 돌릴 수 있게
+
+concurrency:
+  # 배포가 겹치면 서버 상태가 꼬인다. 새 배포가 뜨면 진행 중인 건 취소.
+  group: deploy-main
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # GHCR 에 push 하려면 필요
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 이미지 태그 정하기
+        id: meta
+        run: |
+          # 커밋 해시 앞 7자리를 버전으로 쓴다.
+          # :latest 만 쓰면 가리키는 대상이 계속 바뀌어 되돌릴 이전 버전을 특정할 수 없다.
+          echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: QEMU 설치 (x86 러너에서 arm64 를 굽기 위해)
+        uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: GHCR 로그인
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # 워크플로에 자동 제공. 따로 만들 것 없음
+
+      - name: 빌드 & 푸시
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # ★ 서버가 t4g(ARM) 라서 arm64. amd64 로 구우면 exec format error 로 안 뜬다.
+          platforms: linux/arm64
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 서버로 파일 전송 (compose + env)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: docker-compose.yml
+          target: ~/app/bbangmoa
+
+      - name: 배포
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script_stop: true          # 한 줄이라도 실패하면 즉시 중단
+          script: |
+            set -euo pipefail
+            cd ~/app/bbangmoa
+
+            # 이번에 배포할 버전을 .env 에 적는다. compose 가 ${TAG} 로 읽는다.
+            # DB 비밀번호 등 나머지 값은 서버의 .env 에 이미 있고 건드리지 않는다.
+            sed -i '/^TAG=/d' .env 2>/dev/null || true
+            echo "TAG=${{ needs.build.outputs.tag }}" >> .env
+
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            # ── 헬스체크가 진짜로 도는지 확인 ──
+            # SISC 는 Dockerfile 의 HEALTHCHECK 가 꺼져 있어 이 필드가 영원히 없고,
+            # 그래서 폴링 루프가 60초 헛돌다 성공으로 끝난다. 우리는 켰으므로 실제로 판정된다.
+            echo "api 컨테이너가 healthy 가 될 때까지 대기..."
+            for i in $(seq 1 40); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' bbangmoa-api 2>/dev/null || echo "none")
+              case "$status" in
+                healthy)   echo "정상 기동 확인 (${i}회차)"; exit 0 ;;
+                none)      echo "헬스체크가 정의돼 있지 않다 — Dockerfile 확인 필요"; exit 1 ;;
+                unhealthy) echo "unhealthy 판정"; docker logs --tail 50 bbangmoa-api; exit 1 ;;
+              esac
+              sleep 3
+            done
+            echo "120초 안에 healthy 가 되지 않았다"
+            docker logs --tail 80 bbangmoa-api
+            exit 1
+
+            # 배포가 실패하면 위에서 exit 1 로 끝나므로 워크플로가 빨간불이 된다.
+            # 이전 버전으로 되돌리려면 서버에서 .env 의 TAG 를 옛 값으로 바꾸고
+            #   docker compose up -d
+            # 하면 된다. 그래서 :latest 만 쓰지 않고 커밋 해시 태그를 같이 붙인다.
