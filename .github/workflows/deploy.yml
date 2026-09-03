@@ -108,21 +108,35 @@ jobs:
             # ── 헬스체크가 진짜로 도는지 확인 ──
             # SISC 는 Dockerfile 의 HEALTHCHECK 가 꺼져 있어 이 필드가 영원히 없고,
             # 그래서 폴링 루프가 60초 헛돌다 성공으로 끝난다. 우리는 켰으므로 실제로 판정된다.
+            # case/esac 의 ;; 는 이 액션이 스크립트를 bash -c 로 넘기는 과정에서
+            # 문법 오류를 낸다. if 로만 쓴다.
             echo "api 컨테이너가 healthy 가 될 때까지 대기..."
+            ok=0
+            reason="120초 안에 healthy 가 되지 않았다"
             for i in $(seq 1 40); do
               status=$(docker inspect --format='{{.State.Health.Status}}' bbangmoa-api 2>/dev/null || echo "none")
-              case "$status" in
-                healthy)   echo "정상 기동 확인 (${i}회차)"; exit 0 ;;
-                none)      echo "헬스체크가 정의돼 있지 않다 — Dockerfile 확인 필요"; exit 1 ;;
-                unhealthy) echo "unhealthy 판정"; docker logs --tail 50 bbangmoa-api; exit 1 ;;
-              esac
+              if [ "$status" = "healthy" ]; then
+                echo "정상 기동 확인 (${i}회차, $((i*3))초)"
+                ok=1
+                break
+              fi
+              if [ "$status" = "none" ]; then
+                reason="헬스체크가 정의돼 있지 않다 — Dockerfile 의 HEALTHCHECK 확인 필요"
+                break
+              fi
+              if [ "$status" = "unhealthy" ]; then
+                reason="unhealthy 판정"
+                break
+              fi
               sleep 3
             done
-            echo "120초 안에 healthy 가 되지 않았다"
-            docker logs --tail 80 bbangmoa-api
-            exit 1
 
-            # 배포가 실패하면 위에서 exit 1 로 끝나므로 워크플로가 빨간불이 된다.
-            # 이전 버전으로 되돌리려면 서버에서 .env 의 TAG 를 옛 값으로 바꾸고
-            #   docker compose up -d
-            # 하면 된다. 그래서 :latest 만 쓰지 않고 커밋 해시 태그를 같이 붙인다.
+            if [ "$ok" != "1" ]; then
+              echo "배포 실패: $reason"
+              docker logs --tail 80 bbangmoa-api || true
+              exit 1
+            fi
+
+            # 롤백: 서버에서 .env 의 TAG 를 이전 커밋 해시로 바꾸고
+            #   cd ~/app/bbangmoa && docker compose up -d
+            # 그래서 :latest 만 쓰지 않고 커밋 해시 태그를 같이 붙인다.
