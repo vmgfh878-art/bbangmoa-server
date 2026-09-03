@@ -42,6 +42,11 @@ management:
       exposure:
         # 필요한 것만 연다. 기본으로 다 열면 내부 정보가 새어나간다.
         include: health,info
+      # Actuator 엔드포인트는 WebConfig의 CorsRegistry를 타지 않는다 —
+      # 별도의 핸들러 매핑(WebMvcEndpointHandlerMapping)이라 여기 따로 설정해야 한다.
+      cors:
+        allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+        allowed-methods: GET,POST
   endpoint:
     health:
       show-details: when-authorized
