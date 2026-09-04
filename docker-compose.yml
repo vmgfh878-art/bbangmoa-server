@@ -67,6 +67,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-localdev}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      # 콤마로 여러 출처. 로컬은 값이 없어 기본값(application.yaml의
+      # localhost:5173)을 그대로 쓴다 — 서버 .env 에만 실제 프론트 주소를 넣는다.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
       TZ: Asia/Seoul
       JAVA_OPTS: ${JAVA_OPTS:--Xmx512m -XX:+UseG1GC}
     depends_on:
