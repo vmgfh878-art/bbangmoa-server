@@ -58,6 +58,13 @@ server:
   # 이걸 켜야 스프링이 원래 요청을 https로 인식한다.
   forward-headers-strategy: framework
 
+app:
+  cors:
+    # WebConfig가 이 값을 읽어 일반 API(/api/** 등)의 CORS를 연다.
+    # 위 management.endpoints.web.cors.allowed-origins 와 같은 환경변수를 재사용한다 —
+    # 하나만 export되고 다른 하나는 빠져 CORS 설정이 두 갈래로 어긋나는 걸 막기 위해서다.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+
 logging:
   level:
     root: INFO

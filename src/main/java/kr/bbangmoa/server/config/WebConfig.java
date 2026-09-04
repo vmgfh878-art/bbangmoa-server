@@ -1,5 +1,6 @@
 package kr.bbangmoa.server.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -7,12 +8,19 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
+    // application.yaml 의 app.cors.allowed-origins 에서 주입된다.
+    // 그 값은 결국 CORS_ALLOWED_ORIGINS 환경변수 하나를 읽는다 —
+    // 서버 .env 에서 그 값 하나만 바꾸면 여기와 Actuator CORS가 같이 바뀐다.
+    private final String[] allowedOrigins;
+
+    public WebConfig(@Value("${app.cors.allowed-origins}") String allowedOrigins) {
+        this.allowedOrigins = allowedOrigins.split("\\s*,\\s*");
+    }
+
     @Override
     public void addCorsMappings(CorsRegistry registry) {
-        // 프론트는 지금 로컬 Vite 개발 서버에서만 이 서버를 호출한다.
-        // 실제 기능을 프론트로 이관할 때 운영 도메인을 여기에 추가한다.
         registry.addMapping("/**")
-                .allowedOrigins("http://localhost:5173")
+                .allowedOrigins(allowedOrigins)
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*");
     }

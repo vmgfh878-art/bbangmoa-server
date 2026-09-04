@@ -29,7 +29,28 @@ env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
+  test:
+    # Dockerfile 은 -x test 로 테스트를 건너뛴다 — 이미지 빌드는 가볍게 유지하고,
+    # 검증은 여기서 러너의 네이티브 Gradle로 한다. 여기서 실패하면 build/deploy 가
+    # 아예 안 돈다(need로 이어짐) — Dockerfile 의 -x test 는 그대로 둔다.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Gradle 캐시
+        uses: gradle/actions/setup-gradle@v4
+
+      - run: chmod +x gradlew
+
+      - run: ./gradlew test
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
