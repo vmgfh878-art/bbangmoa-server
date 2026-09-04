@@ -34,6 +34,25 @@ jobs:
     # 검증은 여기서 러너의 네이티브 Gradle로 한다. 여기서 실패하면 build/deploy 가
     # 아예 안 돈다(need로 이어짐) — Dockerfile 의 -x test 는 그대로 둔다.
     runs-on: ubuntu-latest
+    services:
+      # 자동 생성된 ServerApplicationTests.contextLoads() 가 전체 스프링 컨텍스트를
+      # 띄우면서 Flyway가 즉시 DB에 접속한다. 러너는 빈 우분투라 이게 없으면
+      # "java.net.ConnectException" 으로 죽는다. application.yaml 의 기본값
+      # (DB_URL 미설정 시 jdbc:postgresql://localhost:5432/bbangmoa, 계정 bbangmoa)
+      # 과 정확히 맞춰서 별도 환경변수 없이 그대로 붙게 한다.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: bbangmoa
+          POSTGRES_USER: bbangmoa
+          POSTGRES_PASSWORD: localdev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bbangmoa -d bbangmoa"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
