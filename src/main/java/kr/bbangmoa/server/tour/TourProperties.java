@@ -15,27 +15,38 @@ import java.util.Set;
  */
 @ConfigurationProperties(prefix = "app.tour")
 public record TourProperties(
-        /** 상류 주소. 뒤에 /areaBasedList2 같은 게 붙는다. */
         String baseUrl,
-
-        /** 관광공사 서비스키(디코딩 키). 환경변수 TOUR_API_KEY 에서 온다. */
         String serviceKey,
-
-        /**
-         * 통과시킬 오퍼레이션 목록. 여기 없는 이름은 404.
-         * List 가 아니라 Set 인 이유: contains 가 O(1) 이고, 중복 설정이 의미 없다.
-         */
         Set<String> allowedOperations,
-
-        /** 상류와 TCP 연결을 맺기까지 기다리는 시간. */
         Duration connectTimeout,
-
-        /** 연결된 뒤 응답 바이트가 안 올 때 기다리는 시간. 연결 타임아웃과 별개다. */
         Duration readTimeout,
-
-        /** 상류 응답 본문 상한. 넘으면 끊는다. */
-        int maxResponseBytes
+        int maxResponseBytes,
+        Cache cache
 ) {
+    /**
+     * 캐시 설정.
+     *
+     * TTL 을 하나로 안 두고 나눈 이유
+     *   상세(detailCommon2 · detailIntro2)는 contentId 하나에 대한 고정 정보다.
+     *   가게 설명이나 대표 이미지가 하루 안에 바뀔 일은 거의 없다.
+     *   목록(areaBasedList2)은 신규 등록이 반영되므로 상세보다 자주 바뀐다.
+     *   같은 TTL 을 쓰면 둘 중 하나는 손해다 — 상세는 필요 이상으로 자주 갱신되고,
+     *   목록은 필요 이상으로 오래 낡는다.
+     */
+    public record Cache(
+            boolean enabled,
+            /** 목록 계열 TTL. */
+            Duration listTtl,
+            /** 상세 계열 TTL. */
+            Duration detailTtl,
+            /** 여기 속하면 detailTtl, 아니면 listTtl 을 쓴다. */
+            Set<String> detailOperations
+    ) {
+        public Duration ttlFor(String operation) {
+            return detailOperations.contains(operation) ? detailTtl : listTtl;
+        }
+    }
+
     /** 키가 안 들어왔는지 판정. 빈 문자열도 없는 것으로 본다. */
     public boolean hasServiceKey() {
         return serviceKey != null && !serviceKey.isBlank();
