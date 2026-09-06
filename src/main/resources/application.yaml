@@ -65,6 +65,26 @@ app:
     # 하나만 export되고 다른 하나는 빠져 CORS 설정이 두 갈래로 어긋나는 걸 막기 위해서다.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
 
+  tour:
+    # 상류 주소. 뒤에 /areaBasedList2 같은 오퍼레이션 이름이 붙는다.
+    base-url: https://apis.data.go.kr/B551011/KorService2
+    # 키가 없으면 빈 문자열 → 컨트롤러가 503 을 낸다. 부팅은 된다.
+    service-key: ${TOUR_API_KEY:}
+    # 여기 없는 이름은 상류를 부르지도 않고 404.
+    # 프론트가 실제로 쓰는 셋만 연다(tourApi.js 기준).
+    allowed-operations: areaBasedList2,detailCommon2,detailIntro2
+    connect-timeout: 3s
+    read-timeout: 5s
+    # 2MiB. 관광공사 응답은 보통 수십 KB 라 넉넉하다.
+    max-response-bytes: 2097152
+
+  ratelimit:
+    enabled: true
+    # 프론트가 한 화면을 그릴 때 관광공사를 여러 번 부른다(빵집 + 관광지 4종 + 상세).
+    # 사람이 정상적으로 쓰면 분당 수십 회. 60 이면 정상 사용은 안 막고
+    # 스크립트로 긁는 건 걸린다.
+    requests-per-minute: 60
+
 logging:
   level:
     root: INFO

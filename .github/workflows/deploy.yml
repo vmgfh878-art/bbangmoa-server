@@ -53,6 +53,20 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      # RateLimitInterceptor 가 StringRedisTemplate 을 주입받으면서 컨텍스트에
+      # 레디스 연결 팩토리가 생긴다. Lettuce 는 지연 연결이라 없어도 부팅 자체는
+      # 되지만, 테스트가 인터셉터를 실제로 타는 순간부터는 필요하다.
+      # 포스트그레를 붙인 것과 같은 이유로 미리 붙인다.
+      # application.yaml 기본값(REDIS_HOST:localhost, REDIS_PORT:6379)에 그대로 맞춘다.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
