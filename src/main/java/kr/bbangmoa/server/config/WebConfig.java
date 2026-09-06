@@ -52,6 +52,6 @@ public class WebConfig implements WebMvcConfigurer {
         // 프록시 경로에만 건다 — /actuator/health 까지 막으면
         // 배포 스크립트의 헬스 폴링이 429 를 맞고 배포가 실패한다.
         registry.addInterceptor(rateLimitInterceptor)
-                .addPathPatterns("/api/tour/**");
+                .addPathPatterns("/api/**");
     }
 }

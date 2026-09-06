@@ -65,39 +65,96 @@ app:
     # 하나만 export되고 다른 하나는 빠져 CORS 설정이 두 갈래로 어긋나는 걸 막기 위해서다.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
 
-  tour:
-    # 상류 주소. 뒤에 /areaBasedList2 같은 오퍼레이션 이름이 붙는다.
-    base-url: https://apis.data.go.kr/B551011/KorService2
-    # 키가 없으면 빈 문자열 → 컨트롤러가 503 을 낸다. 부팅은 된다.
-    service-key: ${TOUR_API_KEY:}
-    # 여기 없는 이름은 상류를 부르지도 않고 404.
-    # 프론트가 실제로 쓰는 셋만 연다(tourApi.js 기준).
-    allowed-operations: areaBasedList2,detailCommon2,detailIntro2
-    # 실측: 성공한 연결은 전부 20~70ms 안에 붙었다. 실패는 SYN 무응답이라
-    # 아무리 기다려도 안 붙는다. 길게 잡을 이유가 없고, 짧아야 재시도가 싸다.
-    connect-timeout: 2s
-    # 연결된 뒤 본문이 오는 시간. 캐시가 있으니 느린 요청이 반복되지는 않는다.
-    read-timeout: 10s
-    # 2MiB. 관광공사 응답은 보통 수십 KB 라 넉넉하다.
-    max-response-bytes: 2097152
-    cache:
-      enabled: true
-      # 목록은 신규 등록이 반영되므로 상세보다 짧게.
-      list-ttl: 6h
-      # contentId 하나에 대한 고정 정보라 하루는 안전하다.
-      detail-ttl: 24h
-      # 예비 사본 수명. 실측상 관광공사 연결 성공률이 40% 수준이라,
-      # 신선도가 만료된 뒤에도 마지막 성공 응답을 오래 붙들고 있다가
-      # 상류가 죽었을 때 대신 내준다. 빵집 목록은 일주일 전 것도 쓸 만하다.
-      stale-ttl: 7d
-      detail-operations: detailCommon2,detailIntro2
-
   ratelimit:
     enabled: true
-    # 프론트가 한 화면을 그릴 때 관광공사를 여러 번 부른다(빵집 + 관광지 4종 + 상세).
-    # 사람이 정상적으로 쓰면 분당 수십 회. 60 이면 정상 사용은 안 막고
-    # 스크립트로 긁는 건 걸린다.
-    requests-per-minute: 60
+    # 프론트가 한 화면을 그릴 때 외부 API를 여러 번 부른다.
+    # 카카오 로컬만 해도 구·키워드 분산으로 수십 번 나간다(kakaoLocal.js).
+    # 그래서 관광공사만 있을 때의 60 으로는 정상 사용자가 걸린다.
+    requests-per-minute: 300
+
+  # ── 모든 상류에 공통인 호출 정책 ──────────────────────────────
+  proxy:
+    # 실측(관광공사): 성공한 연결은 전부 20~70ms 안에 붙었다. 실패는 SYN 무응답이라
+    # 아무리 기다려도 안 붙는다. 길게 잡을 이유가 없고, 짧아야 재시도가 싸다.
+    connect-timeout: 2s
+    read-timeout: 10s
+    # 2MiB. 넘으면 읽다가 끊는다.
+    max-response-bytes: 2097152
+    # 연결 실패 시 추가 시도 횟수. 3회까지 늘려봤자 성공률이 33%→50% 로만 올랐다
+    # (실패가 시간적으로 뭉쳐 있다). 진짜 방어는 아래 stale-ttl 이다.
+    retries: 1
+
+  # ── 상류별 설정 ───────────────────────────────────────────────
+  # 상류의 차이는 로직이 아니라 데이터다 — 키가 쿼리냐 헤더냐, GET 이냐 POST 냐,
+  # 어떤 경로를 여느냐. 그래서 컨트롤러를 복사하지 않고 여기에 적는다.
+  upstreams:
+    tour:
+      base-url: https://apis.data.go.kr/B551011/KorService2
+      auth-type: query
+      auth-name: serviceKey
+      auth-value: ${TOUR_API_KEY:}
+      allowed-paths: areaBasedList2,detailCommon2,detailIntro2
+      methods: GET
+      # 목록은 신규 등록이 반영되므로 짧게, 상세는 contentId 고정 정보라 길게.
+      ttl: 6h
+      long-ttl: 24h
+      long-ttl-paths: detailCommon2,detailIntro2
+      # 실측 연결 성공률이 40% 수준이라 예비 사본을 길게 붙든다.
+      stale-ttl: 7d
+
+    kakao:
+      base-url: https://dapi.kakao.com
+      # 카카오는 키가 쿼리가 아니라 헤더다. "KakaoAK " 접두사까지 있어야 인증된다.
+      auth-type: header
+      auth-name: Authorization
+      auth-prefix: "KakaoAK "
+      auth-value: ${KAKAO_REST_KEY:}
+      allowed-paths: v2/local/search/keyword.json,v2/local/geo/coord2regioncode.json,v2/local/geo/coord2address.json,v2/local/search/category.json
+      methods: GET
+      # 가게 위치·주소는 자주 안 바뀐다. 길게 잡을수록 쿼터가 산다.
+      ttl: 24h
+      stale-ttl: 7d
+
+    kakaonavi:
+      base-url: https://apis-navi.kakaomobility.com
+      # 카카오 로컬과 같은 REST 키를 쓴다. 호스트만 다르다.
+      auth-type: header
+      auth-name: Authorization
+      auth-prefix: "KakaoAK "
+      auth-value: ${KAKAO_REST_KEY:}
+      allowed-paths: v1/directions
+      methods: GET
+      # 자동차 소요시간은 교통상황을 반영한다. 길게 캐시하면 거짓말이 된다.
+      ttl: 10m
+      stale-ttl: 1d
+
+    odsay:
+      base-url: https://api.odsay.com
+      auth-type: query
+      auth-name: apiKey
+      auth-value: ${ODSAY_API_KEY:}
+      allowed-paths: v1/api/searchPubTransPathT
+      methods: GET
+      # ODSAY 는 Referer 로 등록 도메인을 검사한다. 서버에서 부르면 Referer 가 없어
+      # ApiKeyAuthFailed 가 난다(실측). 등록된 주소를 고정으로 붙인다.
+      headers:
+        Referer: https://breadmoa.vercel.app/
+      # 대중교통은 시간표 기반이라 교통상황만큼 흔들리지는 않는다.
+      ttl: 1h
+      stale-ttl: 7d
+
+    tmap:
+      base-url: https://apis.openapi.sk.com
+      # TMAP 은 헤더 이름이 appKey 이고 접두사가 없다.
+      auth-type: header
+      auth-name: appKey
+      auth-value: ${TMAP_APP_KEY:}
+      allowed-paths: tmap/routes/pedestrian
+      # 넷 중 유일하게 POST 다. 좌표를 JSON 바디로 보낸다.
+      methods: POST
+      # 도보 경로는 교통상황과 무관하고 길 자체가 잘 안 바뀐다. 길게 잡아도 된다.
+      ttl: 7d
+      stale-ttl: 30d
 
 logging:
   level:

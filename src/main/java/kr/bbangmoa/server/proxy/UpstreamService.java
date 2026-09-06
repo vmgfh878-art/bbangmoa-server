@@ -1,5 +1,6 @@
-package kr.bbangmoa.server.tour;
+package kr.bbangmoa.server.proxy;
 
+import kr.bbangmoa.server.proxy.UpstreamProperties.Upstream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -8,7 +9,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.MultiValueMap;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
@@ -22,14 +26,11 @@ import java.util.Map;
  *
  * 캐시 방식: 캐시 어사이드(cache-aside)
  *   1) 캐시를 본다  2) 없으면 상류를 부른다  3) 결과를 캐시에 넣는다
- *   애플리케이션이 캐시를 직접 다루는 방식이다. 반대는 캐시가 알아서
- *   뒤의 저장소를 읽어오는 read-through 인데, Redis 를 그렇게 쓰려면
- *   별도 구성이 필요하고 우리 상황엔 과하다.
  */
 @Service
-public class TourService {
+public class UpstreamService {
 
-    private static final Logger log = LoggerFactory.getLogger(TourService.class);
+    private static final Logger log = LoggerFactory.getLogger(UpstreamService.class);
 
     /** 예비 사본 키 접두사. 같은 내용을 수명만 길게 한 벌 더 둔다. */
     private static final String STALE_PREFIX = "stale:";
@@ -37,14 +38,12 @@ public class TourService {
     private static final String FIELD_CONTENT_TYPE = "ct";
     private static final String FIELD_BODY = "body";
 
-    private final TourClient client;
+    private final UpstreamClient client;
     private final StringRedisTemplate redis;
-    private final TourProperties props;
 
-    public TourService(TourClient client, StringRedisTemplate redis, TourProperties props) {
+    public UpstreamService(UpstreamClient client, StringRedisTemplate redis) {
         this.client = client;
         this.redis = redis;
-        this.props = props;
     }
 
     /**
@@ -55,77 +54,91 @@ public class TourService {
      */
     public record Result(int status, MediaType contentType, byte[] body, String cacheStatus) {}
 
-    public Result fetch(String operation, MultiValueMap<String, String> params) {
-        String key = cacheKey(operation, params);
+    public Result fetch(String name, Upstream up, String method, String path,
+                        MultiValueMap<String, String> params, byte[] body) {
+
+        String key = cacheKey(name, method, path, params, body);
         String staleKey = STALE_PREFIX + key;
-        boolean caching = props.cache().enabled();
 
         // 1) 신선한 캐시가 있으면 끝.
-        if (caching) {
-            Result hit = readCache(key, "HIT");
-            if (hit != null) return hit;
-        }
+        Result hit = readCache(key, "HIT");
+        if (hit != null) return hit;
 
         // 2) 상류 호출. 실패하면 여기서 예외가 난다.
-        TourClient.Upstream up;
+        UpstreamClient.Response up2;
         try {
-            up = client.call(operation, params);
-        } catch (TourProxyException e) {
+            up2 = client.call(name, up, method, path, params, body);
+        } catch (ProxyException e) {
             // 3) 상류가 죽었다. 예비 사본이 있으면 그걸 준다.
             //
             //    실측상 관광공사 연결 성공률이 40% 수준이다. 이 폴백이 없으면
             //    캐시가 만료되는 순간마다 사용자 6할이 빈 화면을 본다.
-            //    빵집 목록에 하루 이틀 지난 데이터를 주는 건 아무 문제가 없다.
             //    "정확하지만 없는 화면"보다 "조금 낡았지만 있는 화면"이 낫다.
-            if (caching) {
-                Result stale = readCache(staleKey, "STALE");
-                if (stale != null) {
-                    log.warn("상류 실패 — 예비 사본으로 응답한다: {}", operation);
-                    return stale;
-                }
+            Result stale = readCache(staleKey, "STALE");
+            if (stale != null) {
+                log.warn("상류 실패 — 예비 사본으로 응답한다: {} {}", name, path);
+                return stale;
             }
             throw e;   // 예비 사본도 없으면 어쩔 수 없다
         }
 
-        if (up.status() < 200 || up.status() >= 300) {
+        if (up2.status() < 200 || up2.status() >= 300) {
             // 실패는 캐시하지 않는다. 상류가 잠깐 이상했던 걸 TTL 동안 붙들고 있으면
             // 상류가 회복돼도 우리만 계속 실패를 돌려준다.
-            throw new TourProxyException(502, "상류 응답 코드: " + up.status());
+            throw new ProxyException(502, "상류 응답 코드: " + up2.status());
         }
 
-        MediaType type = up.contentType() != null ? up.contentType() : MediaType.APPLICATION_JSON;
-        if (caching) {
-            // 같은 내용을 수명만 다르게 두 벌 쓴다.
-            //   key      : 신선도 기준(6h/24h). 이게 살아 있으면 상류를 안 부른다.
-            //   staleKey : 7일. 상류가 죽었을 때만 쓰인다.
-            writeCache(key, type, up.body(), props.cache().ttlFor(operation));
-            writeCache(staleKey, type, up.body(), props.cache().staleTtl());
-        }
-        return new Result(up.status(), type, up.body(), "MISS");
+        MediaType type = up2.contentType() != null ? up2.contentType() : MediaType.APPLICATION_JSON;
+        // 같은 내용을 수명만 다르게 두 벌 쓴다.
+        writeCache(key, type, up2.body(), up.ttlFor(path));
+        writeCache(staleKey, type, up2.body(), up.staleTtl());
+        return new Result(up2.status(), type, up2.body(), "MISS");
     }
 
     /**
-     * 캐시 키 = tour:{오퍼레이션}:{정렬된 쿼리스트링}
+     * 캐시 키 = {상류}:{메서드}:{경로}:{정렬된 쿼리}[:{바디 해시}]
      *
      * 정렬하는 이유
      *   ?a=1&b=2 와 ?b=2&a=1 은 같은 요청인데 문자열로는 다르다.
      *   정렬을 안 하면 같은 데이터가 두 벌 캐시되고, 적중률이 그만큼 떨어진다.
      *
-     * serviceKey 를 빼는 이유 둘
+     * 인증 파라미터를 빼는 이유 둘
      *   1) 항상 같은 값이라 구분에 아무 쓸모가 없다.
      *   2) 더 중요한 건, 비밀값이 Redis 에 문자열로 남는다는 것이다.
      *      키를 서버 뒤로 숨기려고 만든 프록시가 키를 캐시에 흘리면 앞뒤가 안 맞는다.
-     *      (애초에 params 에는 serviceKey 가 안 들어오지만, 나중에 누가
-     *       파라미터를 늘렸을 때를 대비해 여기서도 한 번 더 거른다)
+     *
+     * POST 바디는 그대로 넣지 않고 해시로 줄인다 — TMAP 경유지가 많으면 키가 길어지고,
+     * 좌표가 그대로 Redis 에 남는 것도 굳이 할 이유가 없다.
      */
-    private String cacheKey(String operation, MultiValueMap<String, String> params) {
+    private String cacheKey(String name, String method, String path,
+                            MultiValueMap<String, String> params, byte[] body) {
         List<String> parts = new ArrayList<>();
-        params.forEach((name, values) -> {
-            if (name.equalsIgnoreCase("serviceKey")) return;
-            values.forEach(v -> parts.add(name + "=" + v));
+        params.forEach((pname, values) -> {
+            if (pname.equalsIgnoreCase("serviceKey") || pname.equalsIgnoreCase("apiKey")) return;
+            values.forEach(v -> parts.add(pname + "=" + v));
         });
         parts.sort(String::compareTo);
-        return "tour:" + operation + ":" + String.join("&", parts);
+
+        StringBuilder sb = new StringBuilder()
+                .append(name).append(':')
+                .append(method).append(':')
+                .append(path).append(':')
+                .append(String.join("&", parts));
+
+        if (body != null && body.length > 0) {
+            sb.append(':').append(sha256Short(body));
+        }
+        return sb.toString();
+    }
+
+    private String sha256Short(byte[] data) {
+        try {
+            byte[] d = MessageDigest.getInstance("SHA-256").digest(data);
+            return HexFormat.of().formatHex(d, 0, 12);   // 24자면 충돌 걱정은 없다
+        } catch (Exception e) {
+            // 해시를 못 만들면 캐시를 못 쓸 뿐이다. 요청 자체를 실패시킬 이유는 없다.
+            return "nohash-" + data.length;
+        }
     }
 
     /**
@@ -134,7 +147,7 @@ public class TourService {
      * 그러면 redis-cli 로 열어봤을 때 사람이 못 읽는다.
      * 캐시는 장애 때 제일 먼저 열어보는 곳이라 읽히는 게 중요하다.
      */
-    private void writeCache(String key, MediaType type, byte[] body, java.time.Duration ttl) {
+    private void writeCache(String key, MediaType type, byte[] body, Duration ttl) {
         try {
             redis.opsForHash().putAll(key, Map.of(
                     FIELD_CONTENT_TYPE, type.toString(),

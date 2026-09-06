@@ -76,6 +76,10 @@ services:
       #     컨테이너로 자동 전달되지 않는다. CORS_ALLOWED_ORIGINS 때 한 번 겪은 함정.
       #  값이 없으면 빈 문자열 — 키 없이도 컨테이너는 뜨게 둔다(Phase 1에서 판정).
       TOUR_API_KEY: ${TOUR_API_KEY:-}
+      # 카카오 로컬과 카카오 모빌리티가 같은 REST 키를 공유한다.
+      KAKAO_REST_KEY: ${KAKAO_REST_KEY:-}
+      ODSAY_API_KEY: ${ODSAY_API_KEY:-}
+      TMAP_APP_KEY: ${TMAP_APP_KEY:-}
       TZ: Asia/Seoul
       JAVA_OPTS: ${JAVA_OPTS:--Xmx512m -XX:+UseG1GC}
     depends_on:
