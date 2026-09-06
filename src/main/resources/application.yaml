@@ -122,8 +122,8 @@ app:
       auth-name: Authorization
       auth-prefix: "KakaoAK "
       auth-value: ${KAKAO_REST_KEY:}
-      allowed-paths: v1/directions
-      methods: GET
+      allowed-paths: v1/directions,v1/waypoints/directions,v1/destinations/directions
+      methods: GET,POST
       # 자동차 소요시간은 교통상황을 반영한다. 길게 캐시하면 거짓말이 된다.
       ttl: 10m
       stale-ttl: 1d

@@ -23,6 +23,8 @@ import java.util.Map;
  *   GET  /api/tour/areaBasedList2?...            → apis.data.go.kr (키: 쿼리)
  *   GET  /api/kakao/v2/local/search/keyword.json → dapi.kakao.com  (키: 헤더)
  *   GET  /api/kakaonavi/v1/directions?...        → apis-navi.kakaomobility.com
+ *   POST /api/kakaonavi/v1/waypoints/directions  → apis-navi.kakaomobility.com
+ *   POST /api/kakaonavi/v1/destinations/directions → apis-navi.kakaomobility.com
  *   GET  /api/odsay/v1/api/searchPubTransPathT   → api.odsay.com   (키: 쿼리)
  *   POST /api/tmap/tmap/routes/pedestrian        → apis.openapi.sk.com (키: 헤더, 바디 JSON)
  *
