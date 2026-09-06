@@ -31,6 +31,9 @@ public class TourService {
 
     private static final Logger log = LoggerFactory.getLogger(TourService.class);
 
+    /** 예비 사본 키 접두사. 같은 내용을 수명만 길게 한 벌 더 둔다. */
+    private static final String STALE_PREFIX = "stale:";
+
     private static final String FIELD_CONTENT_TYPE = "ct";
     private static final String FIELD_BODY = "body";
 
@@ -44,18 +47,45 @@ public class TourService {
         this.props = props;
     }
 
-    /** 캐시에서 나왔는지까지 알려준다. 컨트롤러가 X-Cache 헤더에 쓴다. */
-    public record Result(int status, MediaType contentType, byte[] body, boolean fromCache) {}
+    /**
+     * 어디서 나온 응답인지까지 알려준다. 컨트롤러가 X-Cache 헤더에 쓴다.
+     *   HIT   신선한 캐시
+     *   MISS  상류를 실제로 불러서 받아옴
+     *   STALE 상류가 죽어서 예비 사본을 대신 내줌  ← 이게 있는지로 장애를 감지한다
+     */
+    public record Result(int status, MediaType contentType, byte[] body, String cacheStatus) {}
 
     public Result fetch(String operation, MultiValueMap<String, String> params) {
         String key = cacheKey(operation, params);
+        String staleKey = STALE_PREFIX + key;
+        boolean caching = props.cache().enabled();
 
-        if (props.cache().enabled()) {
-            Result hit = readCache(key);
+        // 1) 신선한 캐시가 있으면 끝.
+        if (caching) {
+            Result hit = readCache(key, "HIT");
             if (hit != null) return hit;
         }
 
-        TourClient.Upstream up = client.call(operation, params);
+        // 2) 상류 호출. 실패하면 여기서 예외가 난다.
+        TourClient.Upstream up;
+        try {
+            up = client.call(operation, params);
+        } catch (TourProxyException e) {
+            // 3) 상류가 죽었다. 예비 사본이 있으면 그걸 준다.
+            //
+            //    실측상 관광공사 연결 성공률이 40% 수준이다. 이 폴백이 없으면
+            //    캐시가 만료되는 순간마다 사용자 6할이 빈 화면을 본다.
+            //    빵집 목록에 하루 이틀 지난 데이터를 주는 건 아무 문제가 없다.
+            //    "정확하지만 없는 화면"보다 "조금 낡았지만 있는 화면"이 낫다.
+            if (caching) {
+                Result stale = readCache(staleKey, "STALE");
+                if (stale != null) {
+                    log.warn("상류 실패 — 예비 사본으로 응답한다: {}", operation);
+                    return stale;
+                }
+            }
+            throw e;   // 예비 사본도 없으면 어쩔 수 없다
+        }
 
         if (up.status() < 200 || up.status() >= 300) {
             // 실패는 캐시하지 않는다. 상류가 잠깐 이상했던 걸 TTL 동안 붙들고 있으면
@@ -64,10 +94,14 @@ public class TourService {
         }
 
         MediaType type = up.contentType() != null ? up.contentType() : MediaType.APPLICATION_JSON;
-        if (props.cache().enabled()) {
-            writeCache(key, operation, type, up.body());
+        if (caching) {
+            // 같은 내용을 수명만 다르게 두 벌 쓴다.
+            //   key      : 신선도 기준(6h/24h). 이게 살아 있으면 상류를 안 부른다.
+            //   staleKey : 7일. 상류가 죽었을 때만 쓰인다.
+            writeCache(key, type, up.body(), props.cache().ttlFor(operation));
+            writeCache(staleKey, type, up.body(), props.cache().staleTtl());
         }
-        return new Result(up.status(), type, up.body(), false);
+        return new Result(up.status(), type, up.body(), "MISS");
     }
 
     /**
@@ -100,19 +134,19 @@ public class TourService {
      * 그러면 redis-cli 로 열어봤을 때 사람이 못 읽는다.
      * 캐시는 장애 때 제일 먼저 열어보는 곳이라 읽히는 게 중요하다.
      */
-    private void writeCache(String key, String operation, MediaType type, byte[] body) {
+    private void writeCache(String key, MediaType type, byte[] body, java.time.Duration ttl) {
         try {
             redis.opsForHash().putAll(key, Map.of(
                     FIELD_CONTENT_TYPE, type.toString(),
                     FIELD_BODY, new String(body, StandardCharsets.UTF_8)));
-            redis.expire(key, props.cache().ttlFor(operation));
+            redis.expire(key, ttl);
         } catch (Exception e) {
             // 캐시 쓰기 실패로 응답을 못 주면 본말전도다. 로그만 남기고 넘어간다.
             log.warn("캐시 쓰기 실패 — 응답은 그대로 준다: {}", e.toString());
         }
     }
 
-    private Result readCache(String key) {
+    private Result readCache(String key, String status) {
         try {
             Map<Object, Object> e = redis.opsForHash().entries(key);
             if (e.isEmpty()) return null;
@@ -122,7 +156,7 @@ public class TourService {
             return new Result(200,
                     MediaType.parseMediaType(ct.toString()),
                     body.toString().getBytes(StandardCharsets.UTF_8),
-                    true);
+                    status);
         } catch (Exception ex) {
             // Redis 가 죽어도 상류를 직접 부르면 서비스는 계속된다(fail-open).
             log.warn("캐시 읽기 실패 — 상류로 간다: {}", ex.toString());

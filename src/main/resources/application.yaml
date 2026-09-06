@@ -73,9 +73,9 @@ app:
     # 여기 없는 이름은 상류를 부르지도 않고 404.
     # 프론트가 실제로 쓰는 셋만 연다(tourApi.js 기준).
     allowed-operations: areaBasedList2,detailCommon2,detailIntro2
-    # 3s 로 뒀더니 관광공사와의 TLS 연결이 실측 3.2초에서 끊겼다(HTTP connect timed out).
-    # 상대가 원래 느린 것이므로 우리 쪽을 늘린다.
-    connect-timeout: 5s
+    # 실측: 성공한 연결은 전부 20~70ms 안에 붙었다. 실패는 SYN 무응답이라
+    # 아무리 기다려도 안 붙는다. 길게 잡을 이유가 없고, 짧아야 재시도가 싸다.
+    connect-timeout: 2s
     # 연결된 뒤 본문이 오는 시간. 캐시가 있으니 느린 요청이 반복되지는 않는다.
     read-timeout: 10s
     # 2MiB. 관광공사 응답은 보통 수십 KB 라 넉넉하다.
@@ -86,6 +86,10 @@ app:
       list-ttl: 6h
       # contentId 하나에 대한 고정 정보라 하루는 안전하다.
       detail-ttl: 24h
+      # 예비 사본 수명. 실측상 관광공사 연결 성공률이 40% 수준이라,
+      # 신선도가 만료된 뒤에도 마지막 성공 응답을 오래 붙들고 있다가
+      # 상류가 죽었을 때 대신 내준다. 빵집 목록은 일주일 전 것도 쓸 만하다.
+      stale-ttl: 7d
       detail-operations: detailCommon2,detailIntro2
 
   ratelimit:

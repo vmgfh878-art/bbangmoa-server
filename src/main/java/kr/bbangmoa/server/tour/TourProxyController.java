@@ -56,7 +56,8 @@ public class TourProxyController {
                 .contentType(r.contentType())
                 // 캐시가 실제로 도는지 브라우저 Network 탭에서 바로 보이게 한다.
                 // 표준 헤더는 아니지만 관례적으로 널리 쓰인다.
-                .header("X-Cache", r.fromCache() ? "HIT" : "MISS")
+                // STALE 이 보이면 관광공사가 죽어 있다는 뜻이다 — 장애 감지 수단.
+                .header("X-Cache", r.cacheStatus())
                 .body(r.body());
     }
 

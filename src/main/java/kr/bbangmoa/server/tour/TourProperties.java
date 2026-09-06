@@ -39,6 +39,11 @@ public record TourProperties(
             Duration listTtl,
             /** 상세 계열 TTL. */
             Duration detailTtl,
+            /**
+             * 예비 사본 수명. 신선한 캐시가 만료된 뒤에도 이만큼은 남겨둔다.
+             * 상류가 죽었을 때 이 사본을 대신 내준다 — 낡은 데이터가 빈 화면보다 낫다.
+             */
+            Duration staleTtl,
             /** 여기 속하면 detailTtl, 아니면 listTtl 을 쓴다. */
             Set<String> detailOperations
     ) {
