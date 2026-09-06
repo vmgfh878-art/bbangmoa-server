@@ -36,6 +36,11 @@ public class WebConfig implements WebMvcConfigurer {
                 .allowedOriginPatterns(allowedOrigins)
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
+                // 브라우저는 기본적으로 안전 목록 헤더(Content-Type, Cache-Control 등)만
+                // JS 에 넘겨준다. 커스텀 헤더는 서버가 여기에 적어야 fetch 로 읽을 수 있다.
+                // 서버는 X-Cache 를 보내고 있었지만 브라우저가 가려서 JS 에서는 null 이었다.
+                // (DevTools Network 탭에는 원본이 보인다 — 그래서 더 헷갈린다)
+                .exposedHeaders("X-Cache")
                 // 프리플라이트(OPTIONS) 결과를 브라우저가 1시간 캐시한다.
                 // 안 걸면 요청 하나마다 OPTIONS 가 한 번씩 더 날아간다.
                 .maxAge(3600);
