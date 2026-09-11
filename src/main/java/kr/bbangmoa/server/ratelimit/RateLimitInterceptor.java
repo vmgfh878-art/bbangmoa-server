@@ -61,12 +61,7 @@ public class RateLimitInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // getRemoteAddr() 를 그냥 써도 되는 이유:
-        // application.yaml 의 server.forward-headers-strategy: framework 가 켜져 있어서
-        // 스프링이 Nginx 가 붙인 X-Forwarded-For 를 이미 반영해준다.
-        // 이게 없으면 모든 요청의 IP 가 Nginx 주소 하나로 보여서
-        // 전체 사용자가 한 사람 취급을 받는다.
-        String ip = request.getRemoteAddr();
+        String ip = clientIp(request);
 
         // 키에 "몇 번째 분"을 넣는다 = 고정 창(fixed window) 방식.
         // 분이 바뀌면 키가 통째로 바뀌므로 카운터가 저절로 0 부터 시작한다.
@@ -123,6 +118,39 @@ public class RateLimitInterceptor implements HandlerInterceptor {
             return false;   // false = 컨트롤러로 넘기지 않는다
         }
         return true;
+    }
+
+    /**
+     * 이 요청을 실제로 보낸 사람의 IP.
+     *
+     * getRemoteAddr() 를 쓰면 안 되는 이유 — 실측으로 확인한 우회다.
+     *   application.yaml 의 forward-headers-strategy: framework 때문에 스프링은
+     *   X-Forwarded-For 의 "맨 앞" 값을 클라이언트 IP 로 삼는다. 그런데 Nginx 는
+     *     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+     *   즉 "클라이언트가 보낸 값 + 진짜 IP" 로 **덧붙인다**. 그래서 맨 앞에 오는 건
+     *   클라이언트가 직접 적어 보낸 값이다.
+     *
+     *   운영 서버에서 재현: X-Forwarded-For: 198.51.100.7 로 65회 → 61회째부터 429.
+     *   곧바로 198.51.100.8 로 바꿔 보내니 200. 헤더 한 글자만 바꾸면 한도가 초기화된다.
+     *   즉 IP 당 제한이 사실상 아무것도 막지 못하고 있었다.
+     *
+     * X-Real-IP 를 믿어도 되는 이유
+     *   Nginx 는 그쪽을 proxy_set_header X-Real-IP $remote_addr; 로 **덮어쓴다**.
+     *   클라이언트가 보낸 X-Real-IP 는 버려지고 Nginx 가 본 진짜 주소만 남는다.
+     *   같은 파일 안에서 두 헤더의 동작이 다르다는 게 이 함정의 핵심이다.
+     *
+     * 헤더가 없으면(로컬에서 8080 을 직접 부를 때) getRemoteAddr() 로 돌아간다.
+     * 그 포트는 127.0.0.1 에만 열려 있어 밖에서 위조해 넣을 수 없다.
+     *
+     * ⚠ Cloudflare 주황 구름(Proxied)을 켜면 $remote_addr 이 Cloudflare 주소가 된다.
+     *   그때는 Nginx 에서 real_ip 모듈로 CF-Connecting-IP 를 풀어줘야 한다.
+     */
+    // static · package-private: 인스턴스 상태를 안 쓰므로 레디스 없이 그대로 테스트할 수 있다.
+    // 이 판정이 틀리면 IP 당 제한이 통째로 무의미해지는 자리라 테스트가 닿아야 한다.
+    static String clientIp(HttpServletRequest request) {
+        String real = request.getHeader("X-Real-IP");
+        if (real != null && !real.isBlank()) return real.trim();
+        return request.getRemoteAddr();
     }
 
     /**
