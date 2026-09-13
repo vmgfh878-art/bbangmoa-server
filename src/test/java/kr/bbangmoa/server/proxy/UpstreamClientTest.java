@@ -214,8 +214,8 @@ class UpstreamClientTest {
 
     @Test
     @Timeout(10)
-    @DisplayName("특성화 테스트: 읽기 타임아웃이 연결 실패와 같은 예외로 묶여 재시도되는지 실측한다")
-    void 읽기_타임아웃과_재시도의_경계() throws IOException {
+    @DisplayName("읽기 타임아웃(연결은 됐고 응답만 늦음)은 재시도하지 않는다 — 연결 실패와 구분해야 한다")
+    void 읽기_타임아웃은_재시도하지_않는다() throws IOException {
         AtomicInteger hits = new AtomicInteger();
         CountDownLatch release = new CountDownLatch(1);
         int port = start(ex -> {
@@ -243,12 +243,10 @@ class UpstreamClientTest {
             release.countDown();
         }
 
-        // UpstreamClient.java 의 주석: "응답을 받다가 끊긴 경우(읽기 타임아웃)는 재시도하지 않는다".
-        // hits == 1 이면 주석대로 동작하는 것이고, 2(retries=1이므로 최대 2)면 읽기 타임아웃도
-        // ResourceAccessException 으로 뭉뚱그려져 재시도되고 있다는 뜻 — 상류에 같은 요청이
-        // 두 번 나가고 있다는 실측 증거가 된다. 이 값이 2로 나오면 코드 주석과 실제 동작이
-        // 어긋난 것이니 재시도 분기의 예외 판정 범위를 좁혀야 한다.
+        // UpstreamClient.isConnectFailure() 가 ConnectException/HttpConnectTimeoutException 만
+        // 재시도 대상으로 보고, 그 외 HttpTimeoutException(=읽기 타임아웃)은 즉시 504 로 끊어야 한다.
+        // hits 가 2로 나오면 그 구분이 다시 깨진 것 — 상류에 같은 요청이 중복으로 나간다.
         assertEquals(1, hits.get(),
-                "읽기 타임아웃이 재시도됐다 — 주석의 의도와 실제 동작이 어긋난다");
+                "읽기 타임아웃이 재시도됐다 — 연결 실패와 구분되지 않고 있다");
     }
 }
