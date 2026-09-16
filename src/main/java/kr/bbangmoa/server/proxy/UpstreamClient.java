@@ -14,7 +14,9 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.ConnectException;
 import java.net.URI;
+import java.net.http.HttpConnectTimeoutException;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -61,6 +63,12 @@ public class UpstreamClient {
             try {
                 return attempt(up, method, uri, body);
             } catch (ResourceAccessException e) {
+                if (!isConnectFailure(e)) {
+                    // 연결은 됐는데 응답이 늦었다(읽기 타임아웃) — 요청이 이미 상류에 도달했을 수
+                    // 있으므로 재시도하면 중복 호출이 된다. 여기서 바로 끊는다.
+                    log.warn("상류 응답 지연(읽기 타임아웃) — 재시도하지 않는다: {} — {}", name, e.getMessage());
+                    throw new ProxyException(504, "상류 응답이 제때 오지 않았다");
+                }
                 last = e;
                 if (attempt < props.retries()) {
                     log.warn("상류 연결 실패, 재시도 {}/{}: {} — {}",
@@ -73,6 +81,20 @@ public class UpstreamClient {
         }
         log.warn("상류 연결 최종 실패: {} — {}", name, last != null ? last.getMessage() : "");
         throw new ProxyException(504, "상류 응답이 제때 오지 않았다");
+    }
+
+    /**
+     * 연결 자체가 안 된 경우만 true. JDK HttpClient 는 이 둘을 다른 타입으로 던진다.
+     *   ConnectException            — TCP 연결 거부(SYN 에 RST)
+     *   HttpConnectTimeoutException — connectTimeout 안에 연결 자체가 안 됨
+     *                                 (HttpTimeoutException 의 하위타입이라 구분해서 잡아야 한다)
+     *   그 외 HttpTimeoutException  — 연결은 됐고 readTimeout(요청 전체 타임아웃) 안에
+     *                                 응답을 못 받음 — 이건 재시도 대상이 아니다.
+     * Spring 이 셋 다 ResourceAccessException 하나로 감싸버리므로 cause 를 직접 봐야 한다.
+     */
+    private static boolean isConnectFailure(ResourceAccessException e) {
+        Throwable cause = e.getCause();
+        return cause instanceof ConnectException || cause instanceof HttpConnectTimeoutException;
     }
 
     private Response attempt(Upstream up, String method, URI uri, byte[] body) {
